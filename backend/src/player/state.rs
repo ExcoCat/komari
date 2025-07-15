@@ -180,7 +180,7 @@ pub struct PlayerState {
     is_stationary_timeout: Timeout,
     /// Whether the player is stationary.
     pub(super) is_stationary: bool,
-    pub is_arrow_spam: bool,
+    is_arrow_spam: bool,
     /// Whether the player is dead.
     pub is_dead: bool,
     /// The task for detecting if player is dead.

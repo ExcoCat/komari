@@ -185,8 +185,6 @@ pub struct PlayerState {
     pub is_dead: bool,
     /// The task for detecting if player is dead.
     is_dead_task: Option<Task<Result<bool>>>,
-    /// The task for detecting if arrow spam is active.
-    is_arrow_spam_task: Option<Task<Result<bool>>>,
     /// The task for detecting the tomb OK button when player is dead.
     is_dead_button_task: Option<Task<Result<Rect>>>,
     /// Approximates the player direction for using key.

@@ -1,7 +1,7 @@
 use std::{fmt::Display, str::FromStr};
 
 use dioxus::{document::EvalError, prelude::*};
-use num_traits::PrimInt;
+use num_traits::{PrimInt, clamp};
 use rand::distr::{Alphanumeric, SampleString};
 
 use super::{GenericInputProps, INPUT_CLASS, INPUT_DIV_CLASS, INPUT_LABEL_CLASS};
@@ -107,6 +107,7 @@ pub fn PercentageInput(
     }: GenericInputProps<f32>,
 ) -> Element {
     let input_id = use_memo(|| Alphanumeric.sample_string(&mut rand::rng(), 8));
+    let value = clamp(value, 0.0, 100.0);
     use_auto_numeric(
         input_id,
         value.to_string(),
@@ -203,6 +204,11 @@ fn PrimIntInput<T: 'static + IntoAttributeValue + PrimInt + FromStr + Display>(
     value: T,
 ) -> Element {
     let input_id = use_memo(|| Alphanumeric.sample_string(&mut rand::rng(), 8));
+    let value = clamp(
+        value,
+        minimum_value,
+        maximum_value.unwrap_or(T::max_value()),
+    );
     use_auto_numeric(
         input_id,
         value.to_string(),

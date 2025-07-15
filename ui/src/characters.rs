@@ -621,14 +621,10 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
 
     rsx! {
         Section { name: "Others",
-            div { class: "grid grid-cols-3 gap-4",
+            div { class: "grid grid-cols-[auto_auto_128px] gap-4",
                 CharactersNumberU32Input {
                     label: "Number of Pets (1-3)",
-                    disabled: {
-                        let invalid_character = character_view().id.is_none();
-                        let feed_pet_disabled = !character_view().feed_pet_key.enabled;
-                        invalid_character && feed_pet_disabled
-                    },
+                    disabled: character_view().id.is_none(),
                     on_value: move |num_pets| {
                         save_character(Character {
                             num_pets,
@@ -690,29 +686,30 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
                         }
                     },
                     PotionMode::Percentage(percent) => rsx! {
-                        CharactersPercentageInput {
-                            label: "Use below health percentage",
-                            disabled: character_view().id.is_none(),
-                            on_value: move |percent| {
-                                save_character(Character {
-                                    potion_mode: PotionMode::Percentage(percent),
-                                    ..character_view.peek().clone()
-                                });
-                            },
-                            value: percent,
+                        div { class: "grid grid-cols-2 gap-2",
+                            CharactersPercentageInput {
+                                label: "Use below health",
+                                disabled: character_view().id.is_none(),
+                                on_value: move |percent| {
+                                    save_character(Character {
+                                        potion_mode: PotionMode::Percentage(percent),
+                                        ..character_view.peek().clone()
+                                    });
+                                },
+                                value: percent,
+                            }
+                            CharactersMillisInput {
+                                label: "Health update every",
+                                disabled: character_view().id.is_none(),
+                                on_value: move |millis| {
+                                    save_character(Character {
+                                        health_update_millis: millis,
+                                        ..character_view.peek().clone()
+                                    });
+                                },
+                                value: character_view().health_update_millis,
+                            }
                         }
-                        CharactersMillisInput {
-                            label: "Health update every",
-                            disabled: character_view().id.is_none(),
-                            on_value: move |millis| {
-                                save_character(Character {
-                                    health_update_millis: millis,
-                                    ..character_view.peek().clone()
-                                });
-                            },
-                            value: character_view().health_update_millis,
-                        }
-                        div {}
                     },
                 }
                 CharactersCheckbox {
@@ -741,6 +738,7 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
                     },
                     selected: character_view().class,
                 }
+                div {}
                 CharactersCheckbox {
                     label: "Disable walking",
                     disabled: character_view().id.is_none(),
@@ -752,7 +750,6 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
                     },
                     value: character_view().disable_adjusting,
                 }
-                div {}
                 CharactersSelect::<EliteBossBehavior> {
                     label: "Elite boss spawns behavior",
                     disabled: character_view().id.is_none(),

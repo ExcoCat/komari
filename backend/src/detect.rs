@@ -214,6 +214,9 @@ pub trait Detector: 'static + Send + DynClone + Debug {
 
     /// Detects whether the change channel menu is opened.
     fn detect_change_channel_menu_opened(&self) -> bool;
+
+    /// Detects whether the change channel menu is opened.
+    fn detect_arrow_spam_open(&self) -> bool;
 }
 
 #[cfg(test)]
@@ -254,6 +257,7 @@ mock! {
         fn detect_familiar_menu_opened(&self) -> bool;
         fn detect_familiar_essence_depleted(&self) -> bool;
         fn detect_change_channel_menu_opened(&self) -> bool;
+        fn detect_arrow_spam_open(&self) -> bool;
     }
 
     impl Debug for Detector {
@@ -438,6 +442,9 @@ impl Detector for CachedDetector {
 
     fn detect_change_channel_menu_opened(&self) -> bool {
         detect_change_channel_menu_opened(&**self.grayscale)
+    }
+    fn detect_arrow_spam_open(&self) -> bool {
+        detect_arrow_spam_open(&**self.grayscale)
     }
 }
 
@@ -1934,6 +1941,18 @@ fn detect_change_channel_menu_opened(mat: &impl ToInputArray) -> bool {
     static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
         imgcodecs::imdecode(
             include_bytes!(env!("CHANGE_CHANNEL_MENU_TEMPLATE")),
+            IMREAD_GRAYSCALE,
+        )
+        .unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75).is_ok()
+}
+
+fn detect_arrow_spam_open(mat: &impl ToInputArray) -> bool {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("DETECT_ARROW_SPAM_TEMPLATE")),
             IMREAD_GRAYSCALE,
         )
         .unwrap()

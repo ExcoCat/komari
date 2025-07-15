@@ -180,10 +180,13 @@ pub struct PlayerState {
     is_stationary_timeout: Timeout,
     /// Whether the player is stationary.
     pub(super) is_stationary: bool,
+    pub is_arrow_spawm: bool,
     /// Whether the player is dead.
     pub is_dead: bool,
     /// The task for detecting if player is dead.
     is_dead_task: Option<Task<Result<bool>>>,
+    /// The task for detecting if arrow spam is active.
+    is_arrow_spam_task: Option<Task<Result<bool>>>,
     /// The task for detecting the tomb OK button when player is dead.
     is_dead_button_task: Option<Task<Result<Rect>>>,
     /// Approximates the player direction for using key.
@@ -905,6 +908,7 @@ impl PlayerState {
             self.update_health_state(context);
             self.update_rune_validating_state(context);
             self.update_is_dead_state(context);
+            self.update_is_arrow_spam_state(context);
             true
         } else {
             false
@@ -1117,6 +1121,39 @@ impl PlayerState {
             }
         }
         self.is_dead = is_dead;
+    }
+
+    #[inline]
+    fn update_is_arrow_spam_state(&mut self, context: &Context) {
+        let Update::Ok(is_arrow_spawm) =
+            update_detection_task(context, 3000, &mut self.is_dead_task, |detector| {
+                Ok(detector.detect_player_is_dead())
+            })
+        else {
+            return;
+        };
+        if is_arrow_spawm && !self.is_arrow_spawm {
+            let _ = context
+                .notification
+                .schedule_notification(NotificationKind::PlayerIsDead);
+        }
+        if is_arrow_spawm {
+            let update =
+                update_detection_task(context, 1000, &mut self.is_arrow_spam_task, |detector| {
+                    detector.detect_arrow_spam_open()
+                });
+            match update {
+                Update::Ok(bbox) => {
+                    let _ = context.keys.send(KeyKind::Right);
+                    let _ = context.keys.send(KeyKind::Left);
+                }
+                Update::Err(_) => {
+                    // let _ = context.keys.send_mouse(300, 100, MouseAction::Move);
+                }
+                Update::Pending => (),
+            }
+        }
+        self.is_arrow_spawm = is_arrow_spawm;
     }
 }
 

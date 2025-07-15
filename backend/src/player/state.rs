@@ -1125,35 +1125,23 @@ impl PlayerState {
 
     #[inline]
     fn update_is_arrow_spam_state(&mut self, context: &Context) {
-        let Update::Ok(is_arrow_spawm) =
+        let Update::Ok(is_arrow_spam) =
             update_detection_task(context, 3000, &mut self.is_dead_task, |detector| {
-                Ok(detector.detect_player_is_dead())
+                Ok(detector.detect_arrow_spam_open())
             })
         else {
             return;
         };
-        if is_arrow_spawm && !self.is_arrow_spawm {
+        if is_arrow_spam && !self.is_arrow_spam {
             let _ = context
                 .notification
                 .schedule_notification(NotificationKind::PlayerIsDead);
         }
-        if is_arrow_spawm {
-            let update =
-                update_detection_task(context, 1000, &mut self.is_arrow_spam_task, |detector| {
-                    detector.detect_arrow_spam_open()
-                });
-            match update {
-                Update::Ok(bbox) => {
-                    let _ = context.keys.send(KeyKind::Right);
-                    let _ = context.keys.send(KeyKind::Left);
-                }
-                Update::Err(_) => {
-                    // let _ = context.keys.send_mouse(300, 100, MouseAction::Move);
-                }
-                Update::Pending => (),
-            }
+        if is_arrow_spam {
+            let _ = context.keys.send(KeyKind::Right);
+            let _ = context.keys.send(KeyKind::Left);
         }
-        self.is_arrow_spawm = is_arrow_spawm;
+        self.is_arrow_spam = is_arrow_spam;
     }
 }
 

@@ -324,7 +324,7 @@ fn main() {
         change_channel_menu.to_str().unwrap()
     );
 
-        println!(
+    println!(
         "cargo:rustc-env=DETECT_ARROW_SPAM_TEMPLATE={}",
         arrow_spam_open.to_str().unwrap()
     );

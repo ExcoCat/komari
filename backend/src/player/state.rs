@@ -1138,6 +1138,12 @@ impl PlayerState {
         if is_arrow_spam {
             let _ = context.keys.send(KeyKind::Right);
             let _ = context.keys.send(KeyKind::Left);
+            let _ = context.keys.send(KeyKind::Right);
+            let _ = context.keys.send(KeyKind::Left);
+            let _ = context.keys.send(KeyKind::Right);
+            let _ = context.keys.send(KeyKind::Left);
+            let _ = context.keys.send(KeyKind::Right);
+            let _ = context.keys.send(KeyKind::Left);
         }
         self.is_arrow_spam = is_arrow_spam;
     }

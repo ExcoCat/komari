@@ -101,6 +101,7 @@ impl DiscordNotification {
             NotificationKind::FailOrMapChange => {
                 settings.notifications.notify_on_fail_or_change_map
             }
+            NotificationKind::ArrowSpam => settings.notifications.notify_on_spam_appear,
             NotificationKind::RuneAppear => settings.notifications.notify_on_rune_appear,
             NotificationKind::EliteBossAppear => settings.notifications.notify_on_elite_boss_appear,
             NotificationKind::PlayerIsDead => settings.notifications.notify_on_player_die,
@@ -150,6 +151,10 @@ impl DiscordNotification {
             }
             NotificationKind::RuneAppear => {
                 format!("{user_id}Bot has detected a rune on map")
+            }
+
+            NotificationKind::ArrowSpam => {
+                format!("{user_id}Bot has detected a Arrow Spam Event")
             }
             NotificationKind::EliteBossAppear => {
                 format!("{user_id}Elite boss spawned")

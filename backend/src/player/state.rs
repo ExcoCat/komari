@@ -1133,7 +1133,7 @@ impl PlayerState {
         if is_arrow_spam && !self.is_arrow_spam {
             let _ = context
                 .notification
-                .schedule_notification(NotificationKind::PlayerIsDead);
+                .schedule_notification(NotificationKind::ArrowSpam);
         }
         if is_arrow_spam {
             let _ = context.keys.send(KeyKind::Right);

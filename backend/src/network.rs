@@ -35,6 +35,7 @@ pub enum NotificationKind {
     PlayerStrangerAppear,
     PlayerFriendAppear,
     PlayerIsDead,
+    ArrowSpam,
 }
 
 impl From<NotificationKind> for usize {

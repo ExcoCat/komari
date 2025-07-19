@@ -148,6 +148,7 @@ pub struct Notifications {
     pub discord_user_id: String,
     pub notify_on_fail_or_change_map: bool,
     pub notify_on_rune_appear: bool,
+    pub notify_on_spam_appear: bool = true,
     pub notify_on_elite_boss_appear: bool,
     pub notify_on_player_die: bool,
     pub notify_on_player_guildie_appear: bool,

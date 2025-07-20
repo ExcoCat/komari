@@ -164,6 +164,7 @@ pub struct Settings {
     #[serde(default = "enable_rune_solving_default")]
     pub enable_rune_solving: bool,
     pub enable_panic_mode: bool,
+    pub notify_on_spam_appear: bool,
     pub stop_on_fail_or_change_map: bool,
     pub input_method: InputMethod,
     pub input_method_rpc_server_url: String,

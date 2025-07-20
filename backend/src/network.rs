@@ -185,6 +185,7 @@ impl DiscordNotification {
             | NotificationKind::PlayerGuildieAppear
             | NotificationKind::PlayerStrangerAppear
             | NotificationKind::PlayerFriendAppear
+            | NotificationKind::ArrowSpam
             | NotificationKind::RuneAppear => vec![(None, 2)],
         };
         let delay = match kind {
@@ -194,6 +195,7 @@ impl DiscordNotification {
             | NotificationKind::PlayerGuildieAppear
             | NotificationKind::PlayerStrangerAppear
             | NotificationKind::PlayerFriendAppear
+            | NotificationKind::ArrowSpam
             | NotificationKind::RuneAppear => 3,
         };
 

@@ -157,18 +157,18 @@ pub struct PlayerConfiguration {
 #[derive(Debug, Default)]
 pub struct PlayerState {
     pub config: PlayerConfiguration,
-    /// The id of the normal action provided by [`Rotator`].
-    normal_action_id: u32,
-    /// A normal action requested by [`Rotator`].
+    /// Optional id of current normal action provided by [`Rotator`].
+    normal_action_id: Option<u32>,
+    /// Requested normal action.
     pub(super) normal_action: Option<PlayerAction>,
-    /// The id of the priority action provided by [`Rotator`].
-    priority_action_id: u32,
-    /// A priority action requested by [`Rotator`].
+    /// Optional id of current priority action provided by [`Rotator`].
+    priority_action_id: Option<u32>,
+    /// Requested priority action.
     ///
     /// This action will override the normal action if it is in the middle of executing.
     pub(super) priority_action: Option<PlayerAction>,
     /// The player current health and max health.
-    pub health: Option<(u32, u32)>,
+    health: Option<(u32, u32)>,
     /// The task to update health.
     health_task: Option<Task<Result<(u32, u32)>>>,
     /// The rectangular health bar region.
@@ -182,7 +182,7 @@ pub struct PlayerState {
     pub(super) is_stationary: bool,
     is_arrow_spam: bool,
     /// Whether the player is dead.
-    pub is_dead: bool,
+    is_dead: bool,
     /// The task for detecting if player is dead.
     is_dead_task: Option<Task<Result<bool>>>,
     /// The task for detecting the tomb OK button when player is dead.
@@ -234,6 +234,8 @@ pub struct PlayerState {
     auto_mob_last_quadrant: Option<Quadrant>,
     /// The last auto-mobbing bound's quadrant relative to bottom-left player coordinate.
     auto_mob_last_quadrant_bound: Option<Rect>,
+    /// The next auto-mobbing bound's quadrant relative to bottom-left player coordinate.
+    auto_mob_next_quadrant_bound: Option<Rect>,
     /// Tracks whether movement-related actions do not change the player position after a while.
     ///
     /// Resets when a limit is reached (for unstucking) or position did change.
@@ -276,6 +278,16 @@ impl PlayerState {
         };
     }
 
+    #[inline]
+    pub fn health(&self) -> Option<(u32, u32)> {
+        self.health
+    }
+
+    #[inline]
+    pub fn is_dead(&self) -> bool {
+        self.is_dead
+    }
+
     #[cfg(test)]
     pub fn normal_action(&self) -> Option<PlayerAction> {
         self.normal_action
@@ -290,7 +302,11 @@ impl PlayerState {
     /// The normal action id provided by [`Rotator`].
     #[inline]
     pub fn normal_action_id(&self) -> Option<u32> {
-        self.has_normal_action().then_some(self.normal_action_id)
+        if self.has_normal_action() {
+            self.normal_action_id
+        } else {
+            None
+        }
     }
 
     /// Whether is a normal action.
@@ -299,9 +315,9 @@ impl PlayerState {
         self.normal_action.is_some()
     }
 
-    /// Sets the normal action to `id` and `action` and resets to [`Player::Idle`] on next update.
+    /// Sets the normal action to `id`, `action` and resets to [`Player::Idle`] on next update.
     #[inline]
-    pub fn set_normal_action(&mut self, id: u32, action: PlayerAction) {
+    pub fn set_normal_action(&mut self, id: Option<u32>, action: PlayerAction) {
         self.reset_to_idle_next_update = true;
         self.normal_action_id = id;
         self.normal_action = Some(action);
@@ -323,8 +339,11 @@ impl PlayerState {
     /// The priority action id provided by [`Rotator`].
     #[inline]
     pub fn priority_action_id(&self) -> Option<u32> {
-        self.has_priority_action()
-            .then_some(self.priority_action_id)
+        if self.has_priority_action() {
+            self.priority_action_id
+        } else {
+            None
+        }
     }
 
     /// Whether there is a priority action.
@@ -333,10 +352,10 @@ impl PlayerState {
         self.priority_action.is_some()
     }
 
-    /// Sets the priority action to `id` and `action` and resets to [`Player::Idle`] on next
+    /// Sets the priority action to `id`, `action` and resets to [`Player::Idle`] on next
     /// update.
     #[inline]
-    pub fn set_priority_action(&mut self, id: u32, action: PlayerAction) {
+    pub fn set_priority_action(&mut self, id: Option<u32>, action: PlayerAction) {
         let _ = self.replace_priority_action(id, action);
     }
 
@@ -344,23 +363,30 @@ impl PlayerState {
     #[inline]
     pub fn take_priority_action(&mut self) -> Option<u32> {
         self.reset_to_idle_next_update = true;
-        self.priority_action
-            .take()
-            .is_some()
-            .then_some(self.priority_action_id)
+        if self.priority_action.take().is_some() {
+            self.priority_action_id
+        } else {
+            None
+        }
     }
 
     /// Replaces the current priority action with `id` and `action` and returns the previous
     /// action id if there is one.
     #[inline]
-    pub fn replace_priority_action(&mut self, id: u32, action: PlayerAction) -> Option<u32> {
+    pub fn replace_priority_action(
+        &mut self,
+        id: Option<u32>,
+        action: PlayerAction,
+    ) -> Option<u32> {
         let prev_id = self.priority_action_id;
         self.reset_to_idle_next_update = true;
         self.priority_action_id = id;
-        self.priority_action
-            .replace(action)
-            .is_some()
-            .then_some(prev_id)
+
+        if self.priority_action.replace(action).is_some() {
+            prev_id
+        } else {
+            None
+        }
     }
 
     /// Whether the player is validating whether the rune is solved.
@@ -371,7 +397,7 @@ impl PlayerState {
 
     /// Whether there is a priority rune action.
     #[inline]
-    pub fn has_rune_action(&self) -> bool {
+    fn has_rune_action(&self) -> bool {
         matches!(self.priority_action, Some(PlayerAction::SolveRune))
     }
 
@@ -562,21 +588,45 @@ impl PlayerState {
     /// The returned [`Point`] is in player coordinate relative to bottom-left.
     #[inline]
     pub fn auto_mob_pathing_point(&mut self, context: &Context, bound: Rect) -> Point {
-        let bound_width_half = bound.width / 2;
-        let bound_height_half = bound.height / 2;
-        let bound_x_mid = bound.x + bound_width_half;
-        let bound_y_mid = bound.y + bound_height_half;
+        #[inline]
+        fn quadrant_bound(quadrant: Quadrant, bound: Rect) -> Rect {
+            let bound_width_half = bound.width / 2;
+            let bound_height_half = bound.height / 2;
+            let bound_x_mid = bound.x + bound_width_half;
+            let bound_y_mid = bound.y + bound_height_half;
+
+            match quadrant {
+                Quadrant::TopLeft => {
+                    Rect::new(bound.x, bound.y, bound_width_half, bound_height_half)
+                }
+                Quadrant::TopRight => {
+                    Rect::new(bound_x_mid, bound.y, bound_width_half, bound_height_half)
+                }
+                Quadrant::BottomRight => Rect::new(
+                    bound_x_mid,
+                    bound_y_mid,
+                    bound_width_half,
+                    bound_height_half,
+                ),
+                Quadrant::BottomLeft => {
+                    Rect::new(bound.x, bound_y_mid, bound_width_half, bound_height_half)
+                }
+            }
+        }
 
         let (bbox, platforms) = match context.minimap {
             Minimap::Idle(idle) => (idle.bbox, idle.platforms),
             _ => unreachable!(),
         };
-
         let current_quadrant = if let Some(quadrant) = self.auto_mob_last_quadrant {
             quadrant
         } else {
             // Determine the player current quadrant inside the auto-mobbing bound
             // Convert current position to top-left coordinate first
+            let bound_width_half = bound.width / 2;
+            let bound_height_half = bound.height / 2;
+            let bound_x_mid = bound.x + bound_width_half;
+            let bound_y_mid = bound.y + bound_height_half;
             let pos = self.last_known_pos.expect("inside positional context");
             let pos = Point::new(pos.x, bbox.height - pos.y);
             match (pos.x < bound_x_mid, pos.y < bound_y_mid) {
@@ -589,21 +639,8 @@ impl PlayerState {
 
         // Retrieve the next quadrant in clockwise order relative to current
         let next_quadrant = current_quadrant.next_clockwise();
-        let next_quadrant_bound = match next_quadrant {
-            Quadrant::TopLeft => Rect::new(bound.x, bound.y, bound_width_half, bound_height_half),
-            Quadrant::TopRight => {
-                Rect::new(bound_x_mid, bound.y, bound_width_half, bound_height_half)
-            }
-            Quadrant::BottomRight => Rect::new(
-                bound_x_mid,
-                bound_y_mid,
-                bound_width_half,
-                bound_height_half,
-            ),
-            Quadrant::BottomLeft => {
-                Rect::new(bound.x, bound_y_mid, bound_width_half, bound_height_half)
-            }
-        };
+        let next_quadrant_bound = quadrant_bound(next_quadrant, bound);
+        let next_next_quadrant_bound = quadrant_bound(next_quadrant.next_clockwise(), bound);
 
         self.auto_mob_last_quadrant = Some(next_quadrant);
         self.auto_mob_last_quadrant_bound = Some(Rect::new(
@@ -611,6 +648,12 @@ impl PlayerState {
             bbox.height - next_quadrant_bound.br().y,
             next_quadrant_bound.width,
             next_quadrant_bound.height,
+        ));
+        self.auto_mob_next_quadrant_bound = Some(Rect::new(
+            next_next_quadrant_bound.x,
+            bbox.height - next_next_quadrant_bound.br().y,
+            next_next_quadrant_bound.width,
+            next_next_quadrant_bound.height,
         ));
 
         let bound_xs = next_quadrant_bound.x..(next_quadrant_bound.x + next_quadrant_bound.width);
@@ -705,7 +748,10 @@ impl PlayerState {
         let mob_pos = Point::new(mob_pos.x, y.unwrap_or(mob_pos.y));
         if self
             .auto_mob_last_quadrant_bound
-            .is_some_and(|bound| !bound.contains(mob_pos))
+            .zip(self.auto_mob_next_quadrant_bound)
+            .is_some_and(|(current_bound, next_bound)| {
+                !current_bound.contains(mob_pos) && !next_bound.contains(mob_pos)
+            })
         {
             None
         } else {

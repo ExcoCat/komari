@@ -14,12 +14,14 @@ use backend::{
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use rand::distr::{Alphanumeric, SampleString};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     AppState,
     button::{Button, ButtonKind},
     icons::{DownArrowIcon, PositionIcon, UpArrowIcon, XIcon},
     inputs::{Checkbox, KeyBindingInput, MillisInput, NumberInputI32, NumberInputU32},
+    popup::Popup,
     select::{EnumSelect, TextSelect},
 };
 
@@ -91,13 +93,6 @@ pub fn Actions() -> Element {
     // Handles async operations for action-related
     // TODO: Split into functions
     let coroutine = use_coroutine(move |mut rx: UnboundedReceiver<ActionUpdate>| async move {
-        let mut save_minimap = async move |new_minimap: Minimap| {
-            let new_minimap = upsert_minimap(new_minimap).await;
-
-            minimap.set(Some(new_minimap));
-            update_minimap(minimap_preset(), minimap()).await;
-        };
-
         while let Some(message) = rx.next().await {
             match message {
                 ActionUpdate::Set => {
@@ -107,14 +102,17 @@ pub fn Actions() -> Element {
                     let Some(mut current_minimap) = minimap() else {
                         continue;
                     };
-
                     if current_minimap
                         .actions
                         .try_insert(preset.clone(), vec![])
-                        .is_ok()
+                        .is_err()
                     {
+                        continue;
+                    }
+                    if let Some(current_minimap) = upsert_minimap(current_minimap).await {
                         minimap_preset.set(Some(preset));
-                        save_minimap(current_minimap).await;
+                        minimap.set(Some(current_minimap));
+                        update_minimap(minimap_preset(), minimap()).await;
                     }
                 }
                 ActionUpdate::Delete => {
@@ -125,9 +123,13 @@ pub fn Actions() -> Element {
                         continue;
                     };
 
-                    if current_minimap.actions.remove(&preset).is_some() {
+                    if current_minimap.actions.remove(&preset).is_none() {
+                        continue;
+                    }
+                    if let Some(current_minimap) = upsert_minimap(current_minimap).await {
                         minimap_preset.set(current_minimap.actions.keys().next().cloned());
-                        save_minimap(current_minimap).await;
+                        minimap.set(Some(current_minimap));
+                        update_minimap(minimap_preset(), minimap()).await;
                     }
                 }
                 ActionUpdate::Update(actions) => {
@@ -139,10 +141,14 @@ pub fn Actions() -> Element {
                     };
 
                     current_minimap.actions.insert(preset, actions);
-                    save_minimap(current_minimap).await;
+                    if let Some(current_minimap) = upsert_minimap(current_minimap).await {
+                        minimap.set(Some(current_minimap));
+                    }
                 }
                 ActionUpdate::UpdateMinimap(new_minimap) => {
-                    save_minimap(new_minimap).await;
+                    if let Some(new_minimap) = upsert_minimap(new_minimap).await {
+                        minimap.set(Some(new_minimap));
+                    }
                 }
             }
         }
@@ -309,11 +315,9 @@ pub fn Actions() -> Element {
                 placeholder: "Create an actions preset for the selected map...",
                 on_create: move |name| {
                     coroutine.send(ActionUpdate::Create(name));
-                    coroutine.send(ActionUpdate::Set);
                 },
                 on_delete: move |_| {
                     coroutine.send(ActionUpdate::Delete);
-                    coroutine.send(ActionUpdate::Set);
                 },
                 on_select: move |(_, preset)| {
                     minimap_preset.set(Some(preset));
@@ -488,8 +492,10 @@ fn SectionPlatforms(
         let mut platform = Platform::default();
         let mut key_receiver = key_receiver().await;
         loop {
-            let Ok(key) = key_receiver.recv().await else {
-                continue;
+            let key = match key_receiver.recv().await {
+                Ok(value) => value,
+                Err(RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => continue,
             };
             let Some(settings) = &*settings.peek() else {
                 continue;
@@ -952,76 +958,64 @@ fn PopupPlatformInput(
     use_effect(use_reactive!(|value| platform.set(value)));
 
     rsx! {
-        div { class: "px-16 py-42 w-full h-full absolute inset-0 z-1 bg-gray-950/80 flex",
-            div { class: "bg-gray-900 w-full max-w-104 h-full max-h-36 px-2 m-auto",
-                Section { name: section_name, class: "relative h-full",
-                    div { class: "grid grid-cols-3 gap-3",
-                        div { class: "relative group",
-                            ActionsNumberInputI32 {
-                                label: "X start",
-                                on_value: move |x| {
-                                    platform.write().x_start = x;
-                                },
-                                value: platform().x_start,
-                            }
-                            div {
-                                class: ICON_CONTAINER_CLASS,
-                                onclick: move |_| {
-                                    platform.write().x_start = position.peek().0;
-                                },
-                                PositionIcon { class: ICON_CLASS }
-                            }
-                        }
-                        div { class: "relative group",
-                            ActionsNumberInputI32 {
-                                label: "X end",
-                                on_value: move |x| {
-                                    platform.write().x_end = x;
-                                },
-                                value: platform().x_end,
-                            }
-                            div {
-                                class: ICON_CONTAINER_CLASS,
-                                onclick: move |_| {
-                                    platform.write().x_end = position.peek().0;
-                                },
-                                PositionIcon { class: ICON_CLASS }
-                            }
-                        }
-                        div { class: "relative group",
-                            ActionsNumberInputI32 {
-                                label: "Y",
-                                on_value: move |y| {
-                                    platform.write().y = y;
-                                },
-                                value: platform().y,
-                            }
-                            div {
-                                class: ICON_CONTAINER_CLASS,
-                                onclick: move |_| {
-                                    platform.write().y = position.peek().1;
-                                },
-                                PositionIcon { class: ICON_CLASS }
-                            }
-                        }
+        Popup {
+            title: section_name,
+            class: "max-w-104 max-h-36",
+            confirm_button: button_name,
+            on_confirm: move |_| {
+                on_value((*platform.peek(), index));
+            },
+            cancel_button: "Cancel",
+            on_cancel: move |_| {
+                on_cancel(());
+            },
+            div { class: "grid grid-cols-3 gap-3",
+                div { class: "relative group",
+                    ActionsNumberInputI32 {
+                        label: "X start",
+                        on_value: move |x| {
+                            platform.write().x_start = x;
+                        },
+                        value: platform().x_start,
                     }
-                    div { class: "flex w-full gap-3 absolute bottom-2",
-                        Button {
-                            class: "flex-grow border border-gray-600",
-                            text: button_name,
-                            kind: ButtonKind::Primary,
-                            on_click: move |_| {
-                                on_value((*platform.peek(), index));
-                            },
-                        }
-                        Button {
-                            class: "flex-grow border border-gray-600",
-                            text: "Cancel",
-                            kind: ButtonKind::Danger,
-                            on_click: move |_| {
-                                on_cancel(());
-                            },
-                        }
+                    div {
+                        class: ICON_CONTAINER_CLASS,
+                        onclick: move |_| {
+                            platform.write().x_start = position.peek().0;
+                        },
+                        PositionIcon { class: ICON_CLASS }
+                    }
+                }
+                div { class: "relative group",
+                    ActionsNumberInputI32 {
+                        label: "X end",
+                        on_value: move |x| {
+                            platform.write().x_end = x;
+                        },
+                        value: platform().x_end,
+                    }
+                    div {
+                        class: ICON_CONTAINER_CLASS,
+                        onclick: move |_| {
+                            platform.write().x_end = position.peek().0;
+                        },
+                        PositionIcon { class: ICON_CLASS }
+                    }
+                }
+                div { class: "relative group",
+                    ActionsNumberInputI32 {
+                        label: "Y",
+                        on_value: move |y| {
+                            platform.write().y = y;
+                        },
+                        value: platform().y,
+                    }
+                    div {
+                        class: ICON_CONTAINER_CLASS,
+                        onclick: move |_| {
+                            platform.write().y = position.peek().1;
+                        },
+                        PositionIcon { class: ICON_CLASS }
                     }
                 }
             }
@@ -1040,57 +1034,45 @@ fn PopupBoundInput(
     use_effect(use_reactive!(|value| bound.set(value)));
 
     rsx! {
-        div { class: "px-16 py-35 w-full h-full absolute inset-0 z-1 bg-gray-950/80 flex",
-            div { class: "bg-gray-900 w-full max-w-108 h-full max-h-50 px-2 m-auto",
-                Section { name: "Modify mobbing bound", class: "relative h-full",
-                    div { class: "grid grid-cols-2 gap-3",
-                        ActionsNumberInputI32 {
-                            label: "X offset",
-                            on_value: move |x| {
-                                bound.write().x = x;
-                            },
-                            value: bound().x,
-                        }
-                        ActionsNumberInputI32 {
-                            label: "Y offset",
-                            on_value: move |y| {
-                                bound.write().y = y;
-                            },
-                            value: bound().y,
-                        }
-                        ActionsNumberInputI32 {
-                            label: "Width",
-                            on_value: move |width| {
-                                bound.write().width = width;
-                            },
-                            value: bound().width,
-                        }
-                        ActionsNumberInputI32 {
-                            label: "Height",
-                            on_value: move |height| {
-                                bound.write().height = height;
-                            },
-                            value: bound().height,
-                        }
-                    }
-                    div { class: "flex w-full gap-3 absolute bottom-2",
-                        Button {
-                            class: "flex-grow border border-gray-600",
-                            text: "Save",
-                            kind: ButtonKind::Primary,
-                            on_click: move |_| {
-                                on_value(*bound.peek());
-                            },
-                        }
-                        Button {
-                            class: "flex-grow border border-gray-600",
-                            text: "Cancel",
-                            kind: ButtonKind::Danger,
-                            on_click: move |_| {
-                                on_cancel(());
-                            },
-                        }
-                    }
+        Popup {
+            title: "Modify mobbing bound",
+            class: "max-w-108 max-h-50",
+            confirm_button: "Save",
+            on_confirm: move |_| {
+                on_value(*bound.peek());
+            },
+            cancel_button: "Cancel",
+            on_cancel: move |_| {
+                on_cancel(());
+            },
+            div { class: "grid grid-cols-2 gap-3",
+                ActionsNumberInputI32 {
+                    label: "X offset",
+                    on_value: move |x| {
+                        bound.write().x = x;
+                    },
+                    value: bound().x,
+                }
+                ActionsNumberInputI32 {
+                    label: "Y offset",
+                    on_value: move |y| {
+                        bound.write().y = y;
+                    },
+                    value: bound().y,
+                }
+                ActionsNumberInputI32 {
+                    label: "Width",
+                    on_value: move |width| {
+                        bound.write().width = width;
+                    },
+                    value: bound().width,
+                }
+                ActionsNumberInputI32 {
+                    label: "Height",
+                    on_value: move |height| {
+                        bound.write().height = height;
+                    },
+                    value: bound().height,
                 }
             }
         }
@@ -1416,7 +1398,7 @@ fn ActionMoveInput(
             Button {
                 class: "flex-grow border border-gray-600",
                 text: "Cancel",
-                kind: ButtonKind::Danger,
+                kind: ButtonKind::Secondary,
                 on_click: move |_| {
                     on_cancel(());
                 },
@@ -1687,7 +1669,7 @@ fn ActionKeyInput(
             Button {
                 class: "flex-grow border border-gray-600",
                 text: "Cancel",
-                kind: ButtonKind::Danger,
+                kind: ButtonKind::Secondary,
                 on_click: move |_| {
                     on_cancel(());
                 },

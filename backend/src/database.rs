@@ -4,15 +4,22 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use opencv::core::Rect;
 use platforms::windows::KeyKind;
 use rusqlite::{Connection, Params, Statement, types::Null};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use strum::{Display, EnumIter, EnumString};
+use tokio::sync::broadcast::{Receiver, Sender, channel};
 
 use crate::pathing;
+
+const MAPS: &str = "maps";
+const NAVIGATION_PATHS: &str = "navigation_paths";
+const CHARACTERS: &str = "characters";
+const SETTINGS: &str = "settings";
+const SEEDS: &str = "seeds";
 
 static CONNECTION: LazyLock<Mutex<Connection>> = LazyLock::new(|| {
     let path = env::current_exe()
@@ -25,6 +32,10 @@ static CONNECTION: LazyLock<Mutex<Connection>> = LazyLock::new(|| {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS maps (
+            id INTEGER PRIMARY KEY,
+            data TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS navigation_paths (
             id INTEGER PRIMARY KEY,
             data TEXT NOT NULL
         );
@@ -45,6 +56,18 @@ static CONNECTION: LazyLock<Mutex<Connection>> = LazyLock::new(|| {
     .unwrap();
     Mutex::new(conn)
 });
+static EVENT: LazyLock<Sender<DatabaseEvent>> = LazyLock::new(|| channel(10).0);
+
+#[derive(Debug, Clone)]
+pub enum DatabaseEvent {
+    MinimapUpdated(Minimap),
+    MinimapDeleted(i64),
+    NavigationPathUpdated,
+    NavigationPathDeleted,
+    SettingsUpdated(Settings),
+    CharacterUpdated(Character),
+    CharacterDeleted(i64),
+}
 
 trait Identifiable {
     fn id(&self) -> Option<i64>;
@@ -166,6 +189,12 @@ pub struct Settings {
     pub enable_panic_mode: bool,
     pub notify_on_spam_appear: bool,
     pub stop_on_fail_or_change_map: bool,
+    #[serde(default)]
+    pub cycle_run_stop: bool,
+    #[serde(default = "cycle_run_duration_millis_default")]
+    pub cycle_run_duration_millis: u64,
+    #[serde(default = "cycle_stop_duration_millis_default")]
+    pub cycle_stop_duration_millis: u64,
     pub input_method: InputMethod,
     pub input_method_rpc_server_url: String,
     pub notifications: Notifications,
@@ -191,6 +220,9 @@ impl Default for Settings {
             input_method: InputMethod::default(),
             input_method_rpc_server_url: String::default(),
             stop_on_fail_or_change_map: false,
+            cycle_run_stop: false,
+            cycle_run_duration_millis: cycle_run_duration_millis_default(),
+            cycle_stop_duration_millis: cycle_stop_duration_millis_default(),
             notifications: Notifications::default(),
             familiars: Familiars::default(),
             toggle_actions_key: toggle_actions_key_default(),
@@ -202,6 +234,14 @@ impl Default for Settings {
 }
 
 impl_identifiable!(Settings);
+
+fn cycle_run_duration_millis_default() -> u64 {
+    14400000 // 4 hours
+}
+
+fn cycle_stop_duration_millis_default() -> u64 {
+    3600000 // 1 hour
+}
 
 fn enable_rune_solving_default() -> bool {
     true
@@ -543,9 +583,40 @@ pub struct Minimap {
     pub auto_mob_platforms_bound: bool,
     pub actions_any_reset_on_erda_condition: bool,
     pub actions: HashMap<String, Vec<Action>>,
+    #[serde(default)]
+    pub path_id: Option<i64>, // Not FK, loose coupling to another path
 }
 
 impl_identifiable!(Minimap);
+
+#[derive(PartialEq, Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NavigationPath {
+    #[serde(skip_serializing, default)]
+    pub id: Option<i64>,
+    pub minimap_snapshot_base64: String,
+    pub name_snapshot_base64: String,
+    pub name_snapshot_width: i32,
+    pub name_snapshot_height: i32,
+    pub points: Vec<NavigationPoint>,
+}
+
+impl_identifiable!(NavigationPath);
+
+#[derive(PartialEq, Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct NavigationPoint {
+    pub next_path_id: Option<i64>, // Not FK, loose coupling to another navigation path
+    pub x: i32,
+    pub y: i32,
+    pub transition: NavigationTransition,
+}
+
+#[derive(
+    Clone, Copy, PartialEq, Default, Debug, Serialize, Deserialize, EnumIter, Display, EnumString,
+)]
+pub enum NavigationTransition {
+    #[default]
+    Portal,
+}
 
 fn deserialize_with_ok_or_default<'a, T, D>(deserializer: D) -> Result<T, D::Error>
 where
@@ -960,20 +1031,24 @@ impl From<KeyKind> for KeyBinding {
     }
 }
 
+pub fn database_event_receiver() -> Receiver<DatabaseEvent> {
+    EVENT.subscribe()
+}
+
 pub fn query_seeds() -> Seeds {
-    let mut seeds = query_from_table::<Seeds>("seeds")
+    let mut seeds = query_from_table::<Seeds>(SEEDS)
         .unwrap()
         .into_iter()
         .next()
         .unwrap_or_default();
     if seeds.id.is_none() {
-        upsert_to_table("seeds", &mut seeds).unwrap();
+        upsert_to_table(SEEDS, &mut seeds).unwrap();
     }
     seeds
 }
 
 pub fn query_settings() -> Settings {
-    let mut settings = query_from_table::<Settings>("settings")
+    let mut settings = query_from_table::<Settings>(SETTINGS)
         .unwrap()
         .into_iter()
         .next()
@@ -985,33 +1060,61 @@ pub fn query_settings() -> Settings {
 }
 
 pub fn upsert_settings(settings: &mut Settings) -> Result<()> {
-    upsert_to_table("settings", settings)
-}
-
-pub fn query_characters() -> Result<Vec<Character>> {
-    query_from_table("characters")
-}
-
-pub fn upsert_character(character: &mut Character) -> Result<()> {
-    upsert_to_table("characters", character)
-}
-
-pub fn delete_character(character: &Character) -> Result<()> {
-    delete_from_table("characters", character)
-}
-
-pub fn query_minimaps() -> Result<Vec<Minimap>> {
-    query_from_table("maps").inspect_err(|err| {
-        println!("{err:?}");
+    upsert_to_table(SETTINGS, settings).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::SettingsUpdated(settings.clone()));
     })
 }
 
-pub fn upsert_minimap(map: &mut Minimap) -> Result<()> {
-    upsert_to_table("maps", map)
+pub fn query_characters() -> Result<Vec<Character>> {
+    query_from_table(CHARACTERS)
 }
 
-pub fn delete_minimap(map: &Minimap) -> Result<()> {
-    delete_from_table("maps", map)
+pub fn upsert_character(character: &mut Character) -> Result<()> {
+    upsert_to_table(CHARACTERS, character).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::CharacterUpdated(character.clone()));
+    })
+}
+
+pub fn delete_character(character: &Character) -> Result<()> {
+    delete_from_table(CHARACTERS, character).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::MinimapDeleted(
+            character.id.expect("valid id if deleted"),
+        ));
+    })
+}
+
+pub fn query_minimaps() -> Result<Vec<Minimap>> {
+    query_from_table(MAPS)
+}
+
+pub fn upsert_minimap(minimap: &mut Minimap) -> Result<()> {
+    upsert_to_table(MAPS, minimap).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::MinimapUpdated(minimap.clone()));
+    })
+}
+
+pub fn delete_minimap(minimap: &Minimap) -> Result<()> {
+    delete_from_table(MAPS, minimap).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::MinimapDeleted(
+            minimap.id.expect("valid id if deleted"),
+        ));
+    })
+}
+
+pub fn query_navigation_paths() -> Result<Vec<NavigationPath>> {
+    query_from_table(NAVIGATION_PATHS)
+}
+
+pub fn upsert_navigation_path(path: &mut NavigationPath) -> Result<()> {
+    upsert_to_table(NAVIGATION_PATHS, path).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::NavigationPathUpdated);
+    })
+}
+
+pub fn delete_navigation_path(path: &NavigationPath) -> Result<()> {
+    delete_from_table(NAVIGATION_PATHS, path).inspect(|_| {
+        let _ = EVENT.send(DatabaseEvent::NavigationPathDeleted);
+    })
 }
 
 fn map_data<T>(mut stmt: Statement<'_>, params: impl Params) -> Result<Vec<T>>
@@ -1035,7 +1138,7 @@ where
     T: DeserializeOwned + Identifiable + Default,
 {
     let conn = CONNECTION.lock().unwrap();
-    let stmt = format!("SELECT id, data FROM {table}");
+    let stmt = format!("SELECT id, data FROM {table};");
     let stmt = conn.prepare(&stmt).unwrap();
     map_data(stmt, [])
 }
@@ -1051,13 +1154,19 @@ where
     );
     match data.id() {
         Some(id) => {
-            conn.execute(&stmt, (id, &json))?;
-            Ok(())
+            if conn.execute(&stmt, (id, &json))? > 0 {
+                Ok(())
+            } else {
+                bail!("no row was updated")
+            }
         }
         None => {
-            conn.execute(&stmt, (Null, &json))?;
-            data.set_id(conn.last_insert_rowid());
-            Ok(())
+            if conn.execute(&stmt, (Null, &json))? > 0 {
+                data.set_id(conn.last_insert_rowid());
+                Ok(())
+            } else {
+                bail!("no row was inserted")
+            }
         }
     }
 }
@@ -1067,9 +1176,14 @@ fn delete_from_table<T: Identifiable>(table: &str, data: &T) -> Result<()> {
         if id.is_some() {
             let conn = CONNECTION.lock().unwrap();
             let stmt = format!("DELETE FROM {table} WHERE id = ?1;");
-            conn.execute(&stmt, [id.unwrap()])?;
+            let deleted = conn.execute(&stmt, [id.unwrap()])?;
+
+            if deleted > 0 {
+                return Ok(());
+            }
         }
-        Ok(())
+        bail!("no row was deleted")
     }
+
     inner(table, data.id())
 }

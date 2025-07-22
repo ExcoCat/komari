@@ -3,7 +3,7 @@ use std::{fmt::Display, fs::File, io::BufReader};
 use backend::{
     CaptureMode, FamiliarRarity, Familiars, InputMethod, IntoEnumIterator, KeyBinding,
     KeyBindingConfiguration, Notifications, Settings as SettingsData, SwappableFamiliars,
-    query_capture_handles, query_settings, select_capture_handle, update_settings, upsert_settings,
+    query_capture_handles, query_settings, select_capture_handle, upsert_settings,
 };
 use dioxus::prelude::*;
 use futures_util::StreamExt;
@@ -18,7 +18,6 @@ use crate::{
 
 #[derive(Debug)]
 enum SettingsUpdate {
-    Set,
     Update(SettingsData),
 }
 
@@ -32,12 +31,8 @@ pub fn Settings() -> Element {
         move |mut rx: UnboundedReceiver<SettingsUpdate>| async move {
             while let Some(message) = rx.next().await {
                 match message {
-                    SettingsUpdate::Set => {
-                        update_settings(settings().expect("has value")).await;
-                    }
                     SettingsUpdate::Update(new_settings) => {
                         settings.set(Some(upsert_settings(new_settings).await));
-                        update_settings(settings().expect("has value")).await;
                     }
                 }
             }
@@ -50,7 +45,6 @@ pub fn Settings() -> Element {
     use_future(move || async move {
         if settings.peek().is_none() {
             settings.set(Some(query_settings().await));
-            coroutine.send(SettingsUpdate::Set);
         }
     });
 
@@ -61,6 +55,7 @@ pub fn Settings() -> Element {
             SectionFamiliars { settings_view, save_settings }
             SectionNotifications { settings_view, save_settings }
             SectionHotkeys { settings_view, save_settings }
+            SectionRunStopCycle { settings_view, save_settings }
             SectionOthers { settings_view, save_settings }
         }
     }
@@ -481,6 +476,49 @@ fn SectionHotkeys(
                         });
                     },
                     value: settings_view().platform_end_key,
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SectionRunStopCycle(
+    settings_view: Memo<SettingsData>,
+    save_settings: EventHandler<SettingsData>,
+) -> Element {
+    rsx! {
+        Section { name: "Run/stop cycle",
+            div { class: "grid grid-cols-3 gap-3",
+                MillisInput {
+                    label: "Run duration",
+                    on_value: move |cycle_run_duration_millis| {
+                        save_settings(SettingsData {
+                            cycle_run_duration_millis,
+                            ..settings_view.peek().clone()
+                        });
+                    },
+                    value: settings_view().cycle_run_duration_millis,
+                }
+                MillisInput {
+                    label: "Stop duration",
+                    on_value: move |cycle_stop_duration_millis| {
+                        save_settings(SettingsData {
+                            cycle_stop_duration_millis,
+                            ..settings_view.peek().clone()
+                        });
+                    },
+                    value: settings_view().cycle_stop_duration_millis,
+                }
+                SettingsCheckbox {
+                    label: "Enabled",
+                    on_value: move |cycle_run_stop| {
+                        save_settings(SettingsData {
+                            cycle_run_stop,
+                            ..settings_view.peek().clone()
+                        });
+                    },
+                    value: settings_view().cycle_run_stop,
                 }
             }
         }
